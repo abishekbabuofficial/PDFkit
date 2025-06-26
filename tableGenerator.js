@@ -2,7 +2,7 @@ const PDFDocument = require("pdfkit");
 const fs = require("fs");
 
 // This is the config obtained after the margin application and SF done in previous PDFDocument.ts flow
-const config = require("./fullconfig.json");
+const config = require("./new.json");
 
 // setting up basic page configuration from config file with some modification needed for pdfkit
 const doc = new PDFDocument({ margins: config.baseConfig.margin,
@@ -20,7 +20,7 @@ const tableConfig = config.tableConfig[0];
 
 // It gets column width from the headers
 const getColumnWidths = (headerRow) => {
-  return headerRow.map((item) => item.width || item.styles?.cellWidth || 120);
+  return headerRow.map((item) => (item.width)*1.25 || item.styles?.cellWidth || 120);
 };
 
 // It aligns columns horizontally
