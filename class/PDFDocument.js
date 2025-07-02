@@ -2,6 +2,7 @@ const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const PageSetManager = require("./PageSetManager");
 const { pageMarginParser } = require("./ScaleFactor");
+const StyleAdapter = require('./StyleAdapter');
 
 class PDFGenerator {
   constructor(config, options = {}) {
@@ -46,6 +47,7 @@ class PDFGenerator {
 
     // Initialize PageSetManager
     this.pageSetManager = new PageSetManager();
+    this.StyleAdapter = new StyleAdapter(this.doc)
   }
 
   setConfig(config) {
@@ -157,6 +159,9 @@ class PDFGenerator {
   }
 
   getRows(data) {
+    if(!data){
+        return []
+    }
     let rows = [];
     data.forEach((item) => {
       const rowData = [];
@@ -295,56 +300,11 @@ class PDFGenerator {
       const width = colWidths[colIndex];
       const cellStyle = cellStyles[colIndex] || {};
 
-      // Apply background color
-      const fillColor = cellStyle.fillColor || backgroundColor;
-      if (fillColor) {
-        const color = fillColor.startsWith("#") ? fillColor : `#${fillColor}`;
-        doc.rect(x, startY, width, rowHeight).fill(color);
-      }
-
-      // Draw cell borders
-      this.drawCellBorders(doc, x, startY, width, rowHeight, cellStyle);
-
-      // Set text properties
-      const textColor = cellStyle.textColor || "000000";
-      doc.fillColor(textColor.startsWith("#") ? textColor : `#${textColor}`);
-      const fontSize = this.pxToPt(cellStyle.fontSize) || 10;
-      doc.fontSize(fontSize);
-
-      const fontFamily = "Times";
-      const fontStyle = cellStyle.fontStyle || "normal";
-      const font =
-        fontStyle === "bold" ? `${fontFamily}-Bold` : `${fontFamily}-Roman`;
-      doc.font(font);
-
-      // Set alignment and positioning
-      const align = cellStyle.halign || aligns[colIndex] || "left";
-      const valign = cellStyle.valign || "middle";
-      const padding = cellStyle.cellPadding || {
-        left: 5,
-        top: 5,
-        right: 5,
-        bottom: 5,
-      };
-
-      // Set text options
-      const textOptions = {
-        width: width - (padding.left || 5) - (padding.right || 5),
-        align,
-        lineBreak: cellStyle.overflow === "linebreak" || false,
-      };
-
-      // Calculate vertical position based on valign
-      let textY = startY + (padding.top || 5);
-      if (valign === "middle") {
-        const textHeight = doc.heightOfString(cell || "", textOptions);
-        textY = startY + (rowHeight - textHeight) / 2;
-      } else if (valign === "bottom") {
-        textY = startY + rowHeight - (padding.bottom || 5) - (fontSize || 10);
-      }
-
-      // Draw text
-      doc.text(cell || "", x + (padding.left || 5), textY, textOptions);
+      this.StyleAdapter.drawCell(x, startY, width, rowHeight, cell || "" ,cellStyle,{
+        isHeader,
+        backgroundColor,
+        aligns
+      })
 
       x += width;
     });
@@ -435,7 +395,7 @@ class PDFGenerator {
 
             // Switch to the correct page
             this.doc.switchToPage(pageState.pageIndex);
-            // console.log("Switching to page:", pageState.pageIndex);
+            console.log("Switching to page:", pageState.pageIndex,"And added page");
 
             const newY = this.drawRowForColumns(
               this.doc,
