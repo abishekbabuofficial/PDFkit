@@ -1,9 +1,11 @@
 const PDFDocument = require("pdfkit");
 const fs = require("fs");
+const PageSetManager = require("./PageSetManager");
+const { pageMarginParser } = require("./ScaleFactor");
 
 class PDFGenerator {
   constructor(config, options = {}) {
-    this.config = config;
+    this.config = this.setConfig(config) || config;
     this.options = {
       outputPath: options.outputPath || "generatedpdfkit.pdf",
       layout: config.pageConfig.orientation === "p" ? "portrait" : "landscape",
@@ -13,14 +15,15 @@ class PDFGenerator {
 
     // Initialize document
     this.doc = new PDFDocument({
-      margins: this.config.baseConfig.margin,
+      margins: pageMarginParser(this.config.baseConfig.margin),
       size: this.options.pageSize,
       layout: this.options.layout,
+      bufferPages: true,
     });
+    console.log(this.doc.page.margins)
 
     // Setup output stream
     this.doc.pipe(fs.createWriteStream(this.options.outputPath));
-    
 
     // Initialize properties
     this.startX = this.doc.page.margins.left;
@@ -40,7 +43,22 @@ class PDFGenerator {
 
     // Calculate column groups for pagination
     this.columnGroups = this.calculateColumnGroups();
+
+    // Initialize PageSetManager
+    this.pageSetManager = new PageSetManager();
   }
+
+  setConfig(config) {
+        if (config.baseConfig && config.baseConfig.margin) {
+            config.baseConfig.margin = pageMarginParser(
+                config.baseConfig.margin,
+            );
+        }
+
+        return config;
+    }
+
+  pxToPt = (px, dpi = 96) => (px * 72) / dpi;
 
   calculateColumnGroups() {
     const groups = [];
@@ -152,7 +170,7 @@ class PDFGenerator {
 
         // Calculate the maximum height needed for this row
         const cellHeight = cellStyle.minCellHeight || 30;
-        maxRowHeight = Math.max(maxRowHeight, cellHeight);
+        maxRowHeight = Math.min(maxRowHeight, cellHeight);
       });
 
       rows.push({
@@ -172,7 +190,7 @@ class PDFGenerator {
     const lineTypes = cellStyle.lineType || [];
 
     lineSides.forEach((side, index) => {
-      const lineWidth = lineWidths[index] || 0.5;
+      const lineWidth = lineWidths[index]*1.2 || 0.5;
       const lineColor = lineColors[index] || "#000000";
       const lineStyle = lineStyles[index] || "solid";
       const lineType = lineTypes[index] || "single";
@@ -272,7 +290,6 @@ class PDFGenerator {
     } = options;
     let x = startX;
 
-
     columnIndices.forEach((colIndex) => {
       const cell = rowData[colIndex];
       const width = colWidths[colIndex];
@@ -291,13 +308,13 @@ class PDFGenerator {
       // Set text properties
       const textColor = cellStyle.textColor || "000000";
       doc.fillColor(textColor.startsWith("#") ? textColor : `#${textColor}`);
-
-      const fontSize = cellStyle.fontSize || 10;
+      const fontSize = this.pxToPt(cellStyle.fontSize) || 10;
       doc.fontSize(fontSize);
 
-      const fontFamily = "Helvetica";
+      const fontFamily = "Times";
       const fontStyle = cellStyle.fontStyle || "normal";
-      const font = fontStyle === "bold" ? `${fontFamily}-Bold` : fontFamily;
+      const font =
+        fontStyle === "bold" ? `${fontFamily}-Bold` : `${fontFamily}-Roman`;
       doc.font(font);
 
       // Set alignment and positioning
@@ -310,7 +327,6 @@ class PDFGenerator {
         bottom: 5,
       };
 
-      
       // Set text options
       const textOptions = {
         width: width - (padding.left || 5) - (padding.right || 5),
@@ -321,12 +337,12 @@ class PDFGenerator {
       // Calculate vertical position based on valign
       let textY = startY + (padding.top || 5);
       if (valign === "middle") {
-        const textHeight = doc.heightOfString(cell || "",textOptions);
+        const textHeight = doc.heightOfString(cell || "", textOptions);
         textY = startY + (rowHeight - textHeight) / 2;
       } else if (valign === "bottom") {
         textY = startY + rowHeight - (padding.bottom || 5) - (fontSize || 10);
       }
-      
+
       // Draw text
       doc.text(cell || "", x + (padding.left || 5), textY, textOptions);
 
@@ -336,7 +352,6 @@ class PDFGenerator {
     // console.log("drawn row", this.count++);
     return startY + rowHeight;
   }
-
 
   drawHeaderForColumns(doc, columnIndices, y) {
     const headerStyles = this.tableConfig.head[0].map(
@@ -361,123 +376,190 @@ class PDFGenerator {
     return nextY;
   }
 
-  calculateFittingRows(currentY, remainingRows) {
-    let totalHeight = 0;
-    let fittingRowsCount = 0;
 
-    for (let i = 0; i < remainingRows.length; i++) {
-      const rowHeight = remainingRows[i].height;
-      if (currentY + totalHeight + rowHeight <= this.pageHeight) {
-        totalHeight += rowHeight;
-        fittingRowsCount++;
-      } else {
-        break;
-      }
+  async *rowStreamGenerator() {
+    for (const row of this.rows) {
+      yield row;
     }
-
-    return { fittingRowsCount, totalHeight };
   }
 
-  async generateRowFirstTable() {
-    return new Promise((resolve, reject) => {
+  async generateStreamingTable(rowStream) {
+    return new Promise(async (resolve, reject) => {
       try {
-        // Process each column group
-        for (
-          let groupIndex = 0;
-          groupIndex < this.columnGroups.length;
-          groupIndex++
-        ) {
-          const columnGroup = this.columnGroups[groupIndex];
+        const topY = this.doc.page.margins.top;
+        const maxY = this.pageHeight;
+        const headerHeight = this.getHeaderHeight(this.tableConfig.head[0]);
+        const totalGroups = this.columnGroups.length;
 
-          // Start new page for each column group (except the first one)
-          if (groupIndex > 0) {
-            this.doc.addPage();
+        // Create header drawing function for PageSetManager
+        const headerDrawFunction = (doc, columns, y) => {
+          return this.drawHeaderForColumns(doc, columns, y);
+        };
+
+        // Initialize first page set
+        this.pageSetManager.createPageSet(
+          this.columnGroups,
+          this.doc,
+          topY,
+          headerDrawFunction
+        );
+
+        const range = this.doc.bufferedPageRange();
+        console.log("Pages in buffer:", range);
+
+        // Row streaming
+        for await (const row of rowStream) {
+          const rowHeight = row.height;
+          // Check if the row fits in current page set
+          if (!this.pageSetManager.canFitRow(rowHeight, maxY)) {
+            // Clean up old page sets to save memory, keeps only prev and current pageset
+            this.pageSetManager.cleanup(1);
+
+            // Create new page set when row not fits in current page set
+            this.pageSetManager.createPageSet(
+              this.columnGroups,
+              this.doc,
+              topY,
+              headerDrawFunction
+            );
           }
 
-          let currentY = this.doc.y;
-          let remainingRows = [...this.rows];
+          // Draw this row across all column group pages
+          for (let i = 0; i < totalGroups; i++) {
+            const columnGroup = this.columnGroups[i];
+            const pageState = this.pageSetManager.getPageState(i);
 
-          // Draw header for this column group
-          currentY = this.drawHeaderForColumns(
-            this.doc,
-            columnGroup.columns,
-            currentY
-          );
+            if (!pageState) {
+              throw new Error(`Page state not found for column group ${i}`);
+            }
 
-          // Process rows with pagination
-          while (remainingRows.length > 0) {
-            // Calculate how many rows can fit
-            const { fittingRowsCount } = this.calculateFittingRows(
-              currentY,
-              remainingRows
+            // Switch to the correct page
+            this.doc.switchToPage(pageState.pageIndex);
+            // console.log("Switching to page:", pageState.pageIndex);
+
+            const newY = this.drawRowForColumns(
+              this.doc,
+              row.data,
+              this.columnWidths,
+              columnGroup.columns,
+              this.startX,
+              pageState.currentY,
+              row.height,
+              {
+                aligns: this.columnAligns,
+                cellStyles: row.styles,
+              }
             );
 
-            if (fittingRowsCount === 0) {
-              // No rows can fit, start new page
-              this.doc.addPage();
-              currentY = this.doc.page.margins.top;
-              // Redraw header on new page
-              currentY = this.drawHeaderForColumns(
-                this.doc,
-                columnGroup.columns,
-                currentY
-              );
-              continue;
-            }
-
-            // Draw the fitting rows
-            const rowsToProcess = remainingRows.slice(0, fittingRowsCount);
-            // console.log(rowsToProcess)
-            for (const row of rowsToProcess) {
-              currentY = this.drawRowForColumns(
-                this.doc,
-                row.data,
-                this.columnWidths,
-                columnGroup.columns,
-                this.startX,
-                currentY,
-                row.height,
-                {
-                  aligns: this.columnAligns,
-                  cellStyles: row.styles,
-                }
-              );
-            }
-
-            // Remove processed rows
-            remainingRows = remainingRows.slice(fittingRowsCount);
-
-            // If there are more rows, add a new page
-            if (remainingRows.length > 0) {
-              this.doc.addPage();
-              currentY = this.doc.page.margins.top;
-              // Redraw header on new page
-              currentY = this.drawHeaderForColumns(
-                this.doc,
-                columnGroup.columns,
-                currentY
-              );
-            }
+            // Update page state
+            this.pageSetManager.updatePageState(i, newY);
           }
         }
 
-        // Finalize the document
+        console.log("Final buffer range:", this.doc.bufferedPageRange());
+
+        console.log(this.pageSetManager.pageSets)
+
+        this.pageSetManager.clear();
+
         this.doc.end();
 
-        this.doc.on("end", () => {
-          console.log(`\nPDF generated: ${this.options.outputPath}`);
-          resolve(this.options.outputPath);
-        });
+        this.doc.on("end", () => resolve(this.options.outputPath));
+        this.doc.on("error", reject);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
 
-        this.doc.on("error", (error) => {
-          reject(error);
-        });
+  async generateBufferTable(rowStream) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        let currentPageRows = [];
+        let currentPageHeight = 0;
+        const headerHeight = this.getHeaderHeight(this.tableConfig.head[0]);
+        let isFirstPage = true;
+        const show = rowStream;
+
+        for await (const row of rowStream) {
+          // Check if this row fits in the current page buffer
+          const show = rowStream;
+          if (
+            currentPageHeight + row.height + headerHeight <=
+            this.pageHeight - this.doc.page.margins.top
+          ) {
+            currentPageRows.push(row);
+            currentPageHeight += row.height;
+          } else {
+            // Flush rows for this page
+            this.processPageRows(currentPageRows, isFirstPage);
+            isFirstPage = false;
+
+            // Start buffer with current row
+            currentPageRows = [row];
+            currentPageHeight = row.height;
+          }
+        }
+
+        // Flush remaining rows
+        if (currentPageRows.length > 0) {
+          this.processPageRows(currentPageRows, isFirstPage);
+        }
+
+        console.log(currentPageRows.length);
+
+        // End and resolve
+        this.doc.end();
+        this.doc.on("end", () => resolve(this.options.outputPath));
+        this.doc.on("error", reject);
       } catch (error) {
         reject(error);
       }
     });
   }
 
+  processPageRows(pageRows, isFirstPage) {
+    // Process each column group for the rows that fit on this page
+    for (
+      let groupIndex = 0;
+      groupIndex < this.columnGroups.length;
+      groupIndex++
+    ) {
+      const columnGroup = this.columnGroups[groupIndex];
+
+      // Add new page for each column group (except the very first)
+      if (!isFirstPage || groupIndex > 0) {
+        this.doc.addPage();
+      }
+
+      let currentY = this.doc.page.margins.top;
+
+      // Draw header for this column group
+      currentY = this.drawHeaderForColumns(
+        this.doc,
+        columnGroup.columns,
+        currentY
+      );
+
+      // Draw all rows that fit on this page for this column group
+      for (let i = 0; i < pageRows.length; i++) {
+        const row = pageRows[i];
+        currentY = this.drawRowForColumns(
+          this.doc,
+          row.data,
+          this.columnWidths,
+          columnGroup.columns,
+          this.startX,
+          currentY,
+          row.height,
+          {
+            aligns: this.columnAligns,
+            cellStyles: row.styles,
+          }
+        );
+      }
+    }
+  }
 }
 
 module.exports = PDFGenerator;

@@ -1,6 +1,5 @@
-const config = require("../config/new.json");
-const PDFGenerator = require("./PDFDocColFirst");
-// const PDFGenerator = require("./PDFDocument");
+const config = require("../config/raw.json");
+const PDFGenerator = require("./PdfDocument");
 
 async function main() {
   try {
