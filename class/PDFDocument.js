@@ -38,7 +38,7 @@ class PDFGenerator {
 
     // Initialize table data
     this.headers = this.getHeaders(this.tableConfig.head[0]);
-    this.rows = this.getRows(this.tableConfig.body);
+    this.rows = this.tableConfig.body;
     this.columnWidths = this.getColumnWidths(this.tableConfig.head[0]);
     this.columnAligns = this.getColumnAligns(this.tableConfig.head[0]);
 
@@ -163,12 +163,12 @@ class PDFGenerator {
         return []
     }
     let rows = [];
-    data.forEach((item) => {
+    // data.forEach((item) => {
       const rowData = [];
       const rowStyles = [];
       let maxRowHeight = 30;
 
-      item.forEach((element) => {
+      data.forEach((element) => {
         rowData.push(element.content);
         const cellStyle = element.styles || {};
         rowStyles.push(cellStyle);
@@ -178,12 +178,12 @@ class PDFGenerator {
         maxRowHeight = Math.min(maxRowHeight, cellHeight);
       });
 
-      rows.push({
+      rows = {
         data: rowData,
         styles: rowStyles,
         height: maxRowHeight,
-      });
-    });
+      };
+    // });
     return rows;
   }
 
@@ -339,7 +339,8 @@ class PDFGenerator {
 
   async *rowStreamGenerator() {
     for (const row of this.rows) {
-      yield row;
+      const rown = this.getRows(row)
+      yield rown;
     }
   }
 
@@ -355,7 +356,7 @@ class PDFGenerator {
         const headerDrawFunction = (doc, columns, y) => {
           return this.drawHeaderForColumns(doc, columns, y);
         };
-
+        
         // Initialize first page set
         this.pageSetManager.createPageSet(
           this.columnGroups,
@@ -363,10 +364,10 @@ class PDFGenerator {
           topY,
           headerDrawFunction
         );
-
+        
         const range = this.doc.bufferedPageRange();
+        
         console.log("Pages in buffer:", range);
-
         // Row streaming
         for await (const row of rowStream) {
           const rowHeight = row.height;
