@@ -3,6 +3,7 @@ const fs = require("fs");
 const PageSetManager = require("./PageSetManager");
 const { pageMarginParser } = require("./ScaleFactor");
 const StyleAdapter = require('./StyleAdapter');
+const { applySFMainConfig } = require("./scaleFactorHandler.ts");
 
 class PDFGenerator {
   constructor(config, options = {}) {
@@ -25,6 +26,12 @@ class PDFGenerator {
 
     // Setup output stream
     this.doc.pipe(fs.createWriteStream(this.options.outputPath));
+
+    // apply scale factor
+    this.config = applySFMainConfig(
+      this.doc,
+      this.config,
+    );
 
     // Initialize properties
     this.startX = this.doc.page.margins.left;
@@ -50,6 +57,11 @@ class PDFGenerator {
     this.StyleAdapter = new StyleAdapter(this.doc)
   }
 
+  returnConfig(){
+    return this.config
+  }
+
+
   setConfig(config) {
         if (config.baseConfig && config.baseConfig.margin) {
             config.baseConfig.margin = pageMarginParser(
@@ -60,7 +72,6 @@ class PDFGenerator {
         return config;
     }
 
-  pxToPt = (px, dpi = 96) => (px * 72) / dpi;
 
   calculateColumnGroups() {
     const groups = [];
@@ -136,18 +147,20 @@ class PDFGenerator {
   }
 
   getColumnWidths(headerRow) {
-    return headerRow.map((item) => item.width || item.styles?.cellWidth || 120);
+    return headerRow.map((item) => (item.width || item.styles?.cellWidth)+item.styles?.cellPadding.left+item.styles?.cellPadding.right);
   }
 
   getColumnAligns(headerRow) {
     return headerRow.map((item) => item.styles?.halign || "left");
   }
 
-  getHeaderHeight(headerRow) {
+  getCellHeight(row) {
     let maxHeight = 50;
-    headerRow.forEach((item) => {
-      const cellHeight = item.styles?.minCellHeight || 30;
-      maxHeight = Math.max(maxHeight, cellHeight);
+    row.forEach((cell) => {
+      const textHeight = cell.styles?.fontSize;
+      const verticalPadding = cell.styles?.cellPadding.top + cell.styles?.cellPadding.bottom;
+      const cellHeight = cell.styles?.minCellHeight + verticalPadding;
+      maxHeight = Math.min(maxHeight, cellHeight);
     });
     return maxHeight;
   }
@@ -166,16 +179,12 @@ class PDFGenerator {
     // data.forEach((item) => {
       const rowData = [];
       const rowStyles = [];
-      let maxRowHeight = 30;
+      let maxRowHeight = this.getCellHeight(data)
 
       data.forEach((element) => {
         rowData.push(element.content);
         const cellStyle = element.styles || {};
         rowStyles.push(cellStyle);
-
-        // Calculate the maximum height needed for this row
-        const cellHeight = cellStyle.minCellHeight || 30;
-        maxRowHeight = Math.min(maxRowHeight, cellHeight);
       });
 
       rows = {
@@ -185,96 +194,6 @@ class PDFGenerator {
       };
     // });
     return rows;
-  }
-
-  drawCellBorders(doc, x, y, width, height, cellStyle) {
-    const lineSides = cellStyle.lineSide || [];
-    const lineWidths = cellStyle.lineWidth || [];
-    const lineColors = cellStyle.lineColors || [];
-    const lineStyles = cellStyle.lineStyle || [];
-    const lineTypes = cellStyle.lineType || [];
-
-    lineSides.forEach((side, index) => {
-      const lineWidth = lineWidths[index]*1.2 || 0.5;
-      const lineColor = lineColors[index] || "#000000";
-      const lineStyle = lineStyles[index] || "solid";
-      const lineType = lineTypes[index] || "single";
-
-      // Set line properties
-      doc.lineWidth(lineWidth);
-      doc.strokeColor(lineColor.startsWith("#") ? lineColor : `#${lineColor}`);
-
-      // Set line style (solid, dashed, dotted)
-      if (lineStyle === "dashed") {
-        doc.dash(5, { space: 3 });
-      } else if (lineStyle === "dotted") {
-        doc.dash(1, { space: 2 });
-      } else {
-        doc.undash(); // solid line
-      }
-
-      // Draw the border line based on side
-      switch (side) {
-        case "top":
-          doc
-            .moveTo(x, y)
-            .lineTo(x + width, y)
-            .stroke();
-          break;
-        case "bottom":
-          doc
-            .moveTo(x, y + height)
-            .lineTo(x + width, y + height)
-            .stroke();
-          break;
-        case "left":
-          doc
-            .moveTo(x, y)
-            .lineTo(x, y + height)
-            .stroke();
-          break;
-        case "right":
-          doc
-            .moveTo(x + width, y)
-            .lineTo(x + width, y + height)
-            .stroke();
-          break;
-      }
-
-      // Draw double lines if specified
-      if (lineType === "double") {
-        const spacing = cellStyle.doubleLineSpacing || 2;
-        switch (side) {
-          case "top":
-            doc
-              .moveTo(x, y - spacing)
-              .lineTo(x + width, y - spacing)
-              .stroke();
-            break;
-          case "bottom":
-            doc
-              .moveTo(x, y + height + spacing)
-              .lineTo(x + width, y + height + spacing)
-              .stroke();
-            break;
-          case "left":
-            doc
-              .moveTo(x - spacing, y)
-              .lineTo(x - spacing, y + height)
-              .stroke();
-            break;
-          case "right":
-            doc
-              .moveTo(x + width + spacing, y)
-              .lineTo(x + width + spacing, y + height)
-              .stroke();
-            break;
-        }
-      }
-    });
-
-    // Reset to solid line for next operations
-    doc.undash();
   }
 
   drawRowForColumns(
@@ -317,7 +236,7 @@ class PDFGenerator {
     const headerStyles = this.tableConfig.head[0].map(
       (item) => item.styles || {}
     );
-    const headerHeight = this.getHeaderHeight(this.tableConfig.head[0]);
+    const headerHeight = this.getCellHeight(this.tableConfig.head[0]);
 
     const nextY = this.drawRowForColumns(
       doc,
@@ -349,7 +268,6 @@ class PDFGenerator {
       try {
         const topY = this.doc.page.margins.top;
         const maxY = this.pageHeight;
-        const headerHeight = this.getHeaderHeight(this.tableConfig.head[0]);
         const totalGroups = this.columnGroups.length;
 
         // Create header drawing function for PageSetManager
@@ -396,7 +314,7 @@ class PDFGenerator {
 
             // Switch to the correct page
             this.doc.switchToPage(pageState.pageIndex);
-            console.log("Switching to page:", pageState.pageIndex,"And added page");
+            // console.log("Switching to page:", pageState.pageIndex,"And added page");
 
             const newY = this.drawRowForColumns(
               this.doc,
@@ -433,6 +351,12 @@ class PDFGenerator {
     });
   }
 
+
+
+
+
+
+  // Old Buffering of Rows
   async generateBufferTable(rowStream) {
     return new Promise(async (resolve, reject) => {
       try {

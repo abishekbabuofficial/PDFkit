@@ -122,7 +122,7 @@ class StyleAdapter {
     // Text
     const textColor = cellStyle.textColor || "000000";
     doc.fillColor(textColor.startsWith("#") ? textColor : `#${textColor}`);
-    const fontSize = this.pxToPt(cellStyle.fontSize) || 10;
+    const fontSize = cellStyle.fontSize || 10;
     doc.fontSize(fontSize);
 
     const fontFamily = "Times";
