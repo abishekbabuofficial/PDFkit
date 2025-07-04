@@ -47,7 +47,6 @@ class PDFGenerator {
     this.headers = this.getHeaders(this.tableConfig.head[0]);
     this.rows = this.tableConfig.body;
     this.columnWidths = this.getColumnWidths(this.tableConfig.head[0]);
-    this.columnAligns = this.getColumnAligns(this.tableConfig.head[0]);
 
     // Calculate column groups for pagination
     this.columnGroups = this.calculateColumnGroups();
@@ -150,10 +149,6 @@ class PDFGenerator {
     return headerRow.map((item) => (item.width || item.styles?.cellWidth)+item.styles?.cellPadding.left+item.styles?.cellPadding.right);
   }
 
-  getColumnAligns(headerRow) {
-    return headerRow.map((item) => item.styles?.halign || "left");
-  }
-
   getCellHeight(row) {
     let maxHeight = 50;
     row.forEach((cell) => {
@@ -209,7 +204,6 @@ class PDFGenerator {
     const {
       isHeader = false,
       backgroundColor = null,
-      aligns = [],
       cellStyles = [],
     } = options;
     let x = startX;
@@ -222,7 +216,6 @@ class PDFGenerator {
       this.StyleAdapter.drawCell(x, startY, width, rowHeight, cell || "" ,cellStyle,{
         isHeader,
         backgroundColor,
-        aligns
       })
 
       x += width;
@@ -248,7 +241,6 @@ class PDFGenerator {
       headerHeight,
       {
         isHeader: true,
-        aligns: this.columnAligns,
         cellStyles: headerStyles,
       }
     );
@@ -325,7 +317,6 @@ class PDFGenerator {
               pageState.currentY,
               row.height,
               {
-                aligns: this.columnAligns,
                 cellStyles: row.styles,
               }
             );

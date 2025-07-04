@@ -110,7 +110,7 @@ class StyleAdapter {
     this.drawCellBorders(x, y, width, height, cellStyle);
 
      // // Set alignment and positioning
-      const align = cellStyle.halign || aligns[colIndex] || "left";
+      const align = cellStyle.halign || "left";
       const valign = cellStyle.valign || "middle";
       const padding = cellStyle.cellPadding || {
         left: 5,
